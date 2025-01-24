@@ -8,6 +8,7 @@ import tempfile
 from io import BytesIO
 import re
 import emoji
+import json
 
 app = Flask(__name__)
 load_dotenv()
@@ -155,20 +156,11 @@ def text_to_speech():
 # TTS 声音列表
 @app.route('/api/tts/voices')
 def get_tts_voices():
-    async def get_voices():
-        voices = await edge_tts.list_voices()
-        filtered_voices = []
-        for voice in voices:
-            if voice['Locale'] in ['zh-CN', 'en-US']:
-                filtered_voices.append({
-                    'ShortName': voice['ShortName'],
-                    'Gender': voice['Gender'],
-                    'Locale': voice['Locale']
-                })
-        return filtered_voices
-
-    voices = asyncio.run(get_voices())
-    return jsonify(voices)
+    try:
+        voices = json.loads(os.getenv('EDGE_TTS_VOICES'))
+        return jsonify(voices)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 # 主页

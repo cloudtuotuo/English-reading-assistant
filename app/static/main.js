@@ -24,6 +24,8 @@ const AudioManager = {
 
     async play(text, voice, rate) {
         try {
+            showToast('正在准备播放...', 'success')
+
             // 停止当前播放的音频
             if (this.currentAudio) {
                 this.currentAudio.pause();
@@ -201,11 +203,36 @@ const StorageManager = {
 
     // 获取设置
     getSettings() {
-        return this.get(CONFIG.STORAGE_KEYS.SETTINGS) || CONFIG.DEFAULT_SETTINGS;
+        const settings = this.get(CONFIG.STORAGE_KEYS.SETTINGS);
+
+        // 如果没有设置，返回 null
+        if (!settings) {
+            return null;
+        }
+
+        // 验证必要的配置字段是否存在
+        const requiredFields = ['baseUrl', 'apiKey', 'model', 'ttsVoice', 'ttsSpeed'];
+        const hasAllRequired = requiredFields.every(field => settings[field]);
+
+        // 如果缺少必要字段，返回 null
+        if (!hasAllRequired) {
+            return null;
+        }
+
+        return settings;
     },
 
     // 保存设置
     saveSettings(settings) {
+        // 验证必填字段
+        const requiredFields = ['baseUrl', 'apiKey', 'model', 'ttsVoice', 'ttsSpeed'];
+        const missingFields = requiredFields.filter(field => !settings[field]);
+
+        if (missingFields.length > 0) {
+            console.warn('缺失的必填字段:', missingFields);
+            return false;
+        }
+
         return this.set(CONFIG.STORAGE_KEYS.SETTINGS, settings);
     },
 
@@ -217,7 +244,7 @@ const StorageManager = {
     // 保存生词本
     saveVocabulary(vocabulary) {
         return this.set(CONFIG.STORAGE_KEYS.VOCABULARY, vocabulary);
-    }
+    },
 };
 
 // 打开设置弹窗
@@ -229,18 +256,15 @@ function openSettings() {
 
 // 关闭设置弹窗
 function closeSettings() {
+    loadSettings();
     document.getElementById('settingsModal').style.display = 'none';
 }
 
 // 保存设置
 function saveSettings() {
     try {
-        // 获取当前设置
-        const currentSettings = StorageManager.get('settings') || {};
-
         // 获取表单数据
         const newSettings = {
-            ...currentSettings, // 保留现有设置
             baseUrl: document.getElementById('baseUrl').value,
             apiKey: document.getElementById('apiKey').value,
             model: document.getElementById('model').value,
@@ -250,27 +274,12 @@ function saveSettings() {
             ttsSpeed: document.getElementById('ttsSpeed').value
         };
 
-        // 验证必填字段
-        const requiredFields = ['baseUrl', 'apiKey', 'model', 'ttsVoice', 'ttsSpeed'];
-        const missingFields = requiredFields.filter(field => !newSettings[field]);
-
-        if (missingFields.length > 0) {
-            console.warn('缺失的必填字段:', missingFields);
-            showToast('请填写所有必填字段', 'error');
-            return;
-        }
-
-        // 保存设置
-        const success = StorageManager.set('settings', newSettings);
-
-        if (success) {
+        if (StorageManager.saveSettings(newSettings)) {
             closeSettings();
             showToast('设置已保存', 'success');
         } else {
-            console.error('设置保存失败');
-            showToast('设置保存失败，请检查控制台', 'error');
+            showToast('设置保存失败，请检查字段', 'error');
         }
-
     } catch (error) {
         console.error('保存设置时发生错误:', error);
         showToast('保存设置时发生错误', 'error');
@@ -282,23 +291,23 @@ function saveSettings() {
 async function loadSettings() {
     try {
         // 获取设置,如果没有则加载默认配置
-        let settings = StorageManager.get('settings');
-        if (!settings) {
-            settings = await loadConfig();
-        }
+        let settings = StorageManager.getSettings();
 
         // 更新表单值
         if (settings) {
             // 基础设置
-            document.getElementById('baseUrl').value = settings.baseUrl || CONFIG.DEFAULT_SETTINGS.baseUrl;
-            document.getElementById('apiKey').value = settings.apiKey || CONFIG.DEFAULT_SETTINGS.apiKey;
-            document.getElementById('model').value = settings.model || CONFIG.DEFAULT_SETTINGS.model;
-            document.getElementById('evalPrompt').value = settings.evalPrompt || CONFIG.DEFAULT_SETTINGS.evalPrompt;
-            document.getElementById('translatePrompt').value = settings.translatePrompt || CONFIG.DEFAULT_SETTINGS.translatePrompt;
+            document.getElementById('baseUrl').value = settings.baseUrl;
+            document.getElementById('apiKey').value = settings.apiKey;
+            document.getElementById('model').value = settings.model;
+            document.getElementById('evalPrompt').value = settings.evalPrompt;
+            document.getElementById('translatePrompt').value = settings.translatePrompt;
 
             // TTS 设置
-            document.getElementById('ttsVoice').value = settings.ttsVoice || CONFIG.DEFAULT_SETTINGS.ttsVoice;
-            document.getElementById('ttsSpeed').value = settings.ttsSpeed || CONFIG.DEFAULT_SETTINGS.ttsSpeed;
+            document.getElementById('ttsVoice').value = settings.ttsVoice;
+            document.getElementById('ttsSpeed').value = settings.ttsSpeed;
+        }
+        else {
+            showToast('设置项信息不完整，请检查！', 'error', null);
         }
     } catch (error) {
         console.error('加载设置时发生错误:', error);
@@ -307,7 +316,7 @@ async function loadSettings() {
 }
 
 async function resetSettings() {
-    if (confirm('确定要重置所有设置到默认值吗？')) {
+    if (confirm('确定要获取默认设置吗？')) {
         try {
             // 从服务器获取默认配置
             const defaultConfig = await loadConfig(true);
@@ -321,23 +330,17 @@ async function resetSettings() {
             document.getElementById('ttsVoice').value = defaultConfig.ttsVoice;
             document.getElementById('ttsSpeed').value = defaultConfig.ttsSpeed;
 
-            // 清除本地存储的设置
-            StorageManager.remove('settings');
-
-            // 保存默认配置到本地
-            StorageManager.set('settings', defaultConfig);
-
-            showToast('设置已重置为默认值', 'success');
+            showToast('设置已重置为默认值，保存后生效！', 'success', 5000);
         } catch (error) {
-            console.error('重置设置失败:', error);
-            showToast('重置设置失败', 'error');
+            console.error('默认设置获取失败:', error);
+            showToast('默认设置获取失败', 'error');
         }
     }
 }
 
 // 调用 OpenAI API
 async function callOpenAI(prompt) {
-    const settings = StorageManager.get('settings') || '{}';
+    const settings = StorageManager.getSettings() || '{}';
     const response = await fetch(`${settings.baseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
@@ -514,6 +517,12 @@ document.addEventListener('click', function(e) {
     const actionTips = document.getElementById('actionTips');
     const resultTip = document.getElementById('resultTip');
 
+    // 如果点击的是操作按钮或其子元素，不处理
+    if (e.target.closest('#translateBtn') || e.target.closest('#playBtn')) {
+        return;
+    }
+
+    // 如果点击的不是tips相关元素和原文框，则隐藏tips
     if (!e.target.closest('#actionTips') &&
         !e.target.closest('#original')) {
         actionTips.style.display = 'none';
@@ -581,7 +590,7 @@ function formatTranslationResult(text) {
 // 保存单词到生词本
 function saveToVocabulary(word, translation) {
     // 获取现有词汇列表，确保是数组
-    let vocabulary = StorageManager.get('vocabulary');
+    let vocabulary = StorageManager.getVocabulary();
     if (!Array.isArray(vocabulary)) {
         vocabulary = [];
     }
@@ -593,7 +602,7 @@ function saveToVocabulary(word, translation) {
             translation: translation,
             timestamp: new Date().toISOString()
         });
-        StorageManager.set('vocabulary', vocabulary);
+        StorageManager.saveVocabulary(vocabulary);
         showToast('已添加到生词本', 'success');
     }
 }
@@ -607,7 +616,7 @@ function playSelectedText(event, text) {
 // 显示生词本
 function showVocabulary() {
     // 获取词汇列表，确保是数组
-    const vocabulary = StorageManager.get('vocabulary');
+    const vocabulary = StorageManager.getVocabulary();
     const vocabularyList = document.getElementById('vocabularyList');
     vocabularyList.innerHTML = '';
 
@@ -649,14 +658,14 @@ function closeVocabulary() {
 
 // 删除单个单词
 function deleteWord(index) {
-    let vocabulary = StorageManager.get('vocabulary');
+    let vocabulary = StorageManager.getVocabulary();
     if (!Array.isArray(vocabulary)) {
         vocabulary = [];
         return;
     }
 
     vocabulary.splice(index, 1);
-    StorageManager.set('vocabulary', vocabulary);
+    StorageManager.saveVocabulary(vocabulary);
     showVocabulary(); // 刷新显示
     showToast('已删除', 'success');
 }
@@ -671,7 +680,7 @@ function clearVocabulary() {
 }
 
 // 显示提示信息
-function showToast(message, type = 'success') {
+function showToast(message, type = 'success', duration = 2000) {
     const toast = document.getElementById('toast');
 
     // 清除可能存在的定时器
@@ -694,16 +703,18 @@ function showToast(message, type = 'success') {
     toast.style.transition = 'all 0.3s ease';
     toast.style.transform = 'translate(-50%, 0)';
 
-    // 2秒后开始淡出
-    toast.timeoutId = setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translate(-50%, 20px)';
+    // 如果设置了持续时间，则在指定时间后淡出
+    if (duration !== null) {
+        toast.timeoutId = setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translate(-50%, 20px)';
 
-        // 等待过渡效果完成后隐藏元素
-        toast.hideTimeoutId = setTimeout(() => {
-            toast.style.display = 'none';
-        }, 300);
-    }, 2000);
+            // 等待过渡效果完成后隐藏元素
+            toast.hideTimeoutId = setTimeout(() => {
+                toast.style.display = 'none';
+            }, 300);
+        }, duration);
+    }
 }
 
 // 播放音频
@@ -715,12 +726,12 @@ function playTTS(text, voice = null, rate = null) {
 async function loadConfig(forceLoad = false) {
     try {
         // 如果强制加载或没有本地设置时,从服务器加载默认配置
-        if (forceLoad || !StorageManager.get('settings')) {
+        if (forceLoad || !StorageManager.getSettings()) {
             const response = await fetch('/api/config');
             const defaultConfig = await response.json();
             return defaultConfig;
         }
-        return StorageManager.get('settings');
+        return StorageManager.getSettings();
     } catch (error) {
         console.error('加载配置失败:', error);
         return CONFIG.DEFAULT_SETTINGS;
@@ -781,7 +792,7 @@ function updateVoiceSelect(voices) {
     });
 
     // 设置默认选中值
-    const savedSettings = StorageManager.get('settings');
+    const savedSettings = StorageManager.getSettings();
     if (savedSettings?.ttsVoice) {
         voiceSelect.value = savedSettings.ttsVoice;
     }
@@ -817,8 +828,36 @@ function initializeSettingsTabs() {
 
 // 初始化动作按钮
 function initializeActionButtons() {
+    // 保存选择范围的函数
+    function saveSelection() {
+        const textArea = document.getElementById('original');
+        return {
+            start: textArea.selectionStart,
+            end: textArea.selectionEnd,
+            text: textArea.value.substring(textArea.selectionStart, textArea.selectionEnd)
+        };
+    }
+
+    // 恢复选择范围的函数
+    function restoreSelection(savedSelection) {
+        const textArea = document.getElementById('original');
+        textArea.focus();
+        textArea.setSelectionRange(savedSelection.start, savedSelection.end);
+    }
+
     // 翻译按钮事件
     document.getElementById('translateBtn').addEventListener('click', async function(e) {
+        // 阻止事件冒泡
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 保存当前选择范围
+        const savedSelection = saveSelection();
+        const textArea = document.getElementById('original');
+
+        // 确保文本框获得焦点
+        textArea.focus();
+
         const translateTip = document.getElementById('actionTips');
         const resultTip = document.getElementById('resultTip');
 
@@ -832,7 +871,7 @@ function initializeActionButtons() {
                 const sourceContext = getSourceContext(currentSelection);
                 translationResult.textContent = '翻译中...';
 
-                const settings = StorageManager.get('settings') || '{}';
+                const settings = StorageManager.getSettings() || '{}';
                 const prompt = settings.translatePrompt.replace('{sourceContext}', sourceContext);
 
                 const result = await callOpenAI(prompt);
@@ -842,6 +881,9 @@ function initializeActionButtons() {
                 saveToVocabulary(currentSelection, formattedResult);
 
                 translateTip.style.display = 'none';
+
+                // 在异步操作完成后恢复选择
+                setTimeout(() => restoreSelection(savedSelection), 0);
             } catch (error) {
                 console.error('翻译失败：', error);
                 translationResult.textContent = '翻译失败';
@@ -850,10 +892,24 @@ function initializeActionButtons() {
     });
 
     // 播放按钮事件
-    document.getElementById('playBtn').addEventListener('click', function() {
+    document.getElementById('playBtn').addEventListener('click', function(e) {
+        // 阻止事件冒泡
+        e.preventDefault();
+        e.stopPropagation();
+
+        // 保存选择状态
+        const savedSelection = saveSelection();
+        const textArea = document.getElementById('original');
+
+        // 确保文本框获得焦点
+        textArea.focus();
+
         if (currentSelection) {
             playTTS(currentSelection);
             document.getElementById('actionTips').style.display = 'none';
+
+            // 使用 setTimeout 确保在事件处理完成后恢复选择
+            setTimeout(() => restoreSelection(savedSelection), 0);
         }
     });
 }
@@ -864,10 +920,9 @@ async function initializeApp() {
         // 初始化存储
         StorageManager.init();
 
-        // 并行加载配置和语音列表
+        // 加载配置信息
         const [CONFIG] = await Promise.all([
             loadConfig(),
-            loadTTSVoices()
         ]);
 
         // 初始化各个组件

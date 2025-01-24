@@ -109,7 +109,7 @@ textarea {
 
 /* Prompt设置区域的特殊样式 */
 #prompt textarea {
-    height: 200px; /* 增加文本框高度 */
+    height: 150px; /* 增加文本框高度 */
     min-height: 150px; /* 设置最小高度 */
     font-size: 14px; /* 适当的字体大小 */
     line-height: 1.5; /* 行高 */
@@ -261,6 +261,20 @@ textarea {
     flex-direction: column;
 }
 
+.modal-content-voc {
+    position: relative;
+    background: white;
+    width: 60%;
+    max-width: 600px;
+    height: 70vh; /* 设置最大高度为视窗高度的80% */
+    margin: 50px auto;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    display: flex;
+    flex-direction: column;
+}
+
 .close-btn {
     position: absolute;
     right: 15px;
@@ -308,9 +322,10 @@ textarea {
 
 /* 设置页按钮组样式 */
 .button-group {
-    padding-top: 20px;
-    border-top: 1px solid #eee;
-    margin-top: auto;
+    display: flex;
+    gap: 10px; /* 按钮之间的间距 */
+    justify-content: center; /* 水平居中 */
+    margin-top: 20px; /* 与上方内容的间距 */
 }
 
 .reset-button {
