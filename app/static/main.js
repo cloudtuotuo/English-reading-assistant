@@ -1,11 +1,14 @@
 let currentSelection = '';
 // 全局变量存储语音列表
 let cachedVoices = null;
+// 原文锁定状态管理
+let isLocked = false;
 
 const CONFIG = {
     STORAGE_KEYS: {
         SETTINGS: 'settings',
-        VOCABULARY: 'vocabulary'
+        VOCABULARY: 'vocabulary',
+        DRAFT: 'draft_content'
     },
     DEFAULT_SETTINGS: {
         baseUrl: '',
@@ -15,6 +18,10 @@ const CONFIG = {
         translatePrompt: '',
         ttsVoice: '',
         ttsSpeed: ''
+    },
+    AUTO_SAVE: {
+        INTERVAL: 30000, // 自动保存间隔（毫秒）
+        EXPIRY: 24 * 60 * 60 * 1000 // 24小时（毫秒）
     }
 };
 
@@ -247,6 +254,70 @@ const StorageManager = {
     },
 };
 
+// 草稿管理器
+const DraftManager = {
+    autoSaveTimer: null,
+
+    // 保存草稿
+    saveDraft() {
+        const originalText = document.getElementById('original').value;
+        const translationText = document.getElementById('translation').value;
+
+        if (originalText || translationText) {
+            const draft = {
+                original: originalText,
+                translation: translationText,
+                timestamp: new Date().getTime()
+            };
+            StorageManager.set(CONFIG.STORAGE_KEYS.DRAFT, draft);
+        }
+    },
+
+    // 加载草稿
+    loadDraft() {
+        const draft = StorageManager.get(CONFIG.STORAGE_KEYS.DRAFT);
+        if (draft) {
+            const now = new Date().getTime();
+            // 检查是否过期
+            if (now - draft.timestamp <= CONFIG.AUTO_SAVE.EXPIRY) {
+                document.getElementById('original').value = draft.original || '';
+                document.getElementById('translation').value = draft.translation || '';
+                return true;
+            } else {
+                // 如果过期，清除草稿
+                this.clearDraft();
+            }
+        }
+        return false;
+    },
+
+    // 清除草稿
+    clearDraft() {
+        if (confirm('确定要清除草稿吗？')) {
+            StorageManager.remove(CONFIG.STORAGE_KEYS.DRAFT);
+            document.getElementById('original').value = '';
+            document.getElementById('translation').value = '';
+            showToast('草稿已清除', 'success')
+        }
+    },
+
+    // 开始自动保存
+    startAutoSave() {
+        this.autoSaveTimer = setInterval(() => {
+            this.saveDraft();
+        }, CONFIG.AUTO_SAVE.INTERVAL);
+    },
+
+    // 停止自动保存
+    stopAutoSave() {
+        if (this.autoSaveTimer) {
+            clearInterval(this.autoSaveTimer);
+            this.autoSaveTimer = null;
+        }
+    }
+};
+
+
 // 打开设置弹窗
 function openSettings() {
     loadTTSVoices(false);
@@ -315,6 +386,7 @@ async function loadSettings() {
     }
 }
 
+// 加载默认设置
 async function resetSettings() {
     if (confirm('确定要获取默认设置吗？')) {
         try {
@@ -375,7 +447,7 @@ const LoadingManager = {
     }
 };
 
-// 修改评价功能
+// 评价翻译质量
 async function evaluateTranslation() {
     const original = document.getElementById('original').value;
     const translation = document.getElementById('translation').value;
@@ -408,7 +480,6 @@ async function evaluateTranslation() {
 
 // 评价结果格式化函数
 function formatEvaluationResult(text) {
-    console.log(text)
     // 分割文本为行
     const lines = text.split('\n').map(line => line.trim()).filter(line => line);
 
@@ -461,7 +532,6 @@ function formatEvaluationResult(text) {
     }
 
     html += '</div>';
-    console.log(html)
     return html;
 }
 
@@ -531,6 +601,7 @@ document.addEventListener('click', function(e) {
     }
 });
 
+// 获取选中的待翻译文本
 function getSourceContext(selectedText) {
     const textarea = document.getElementById('original');
     const fullText = textarea.value;
@@ -798,6 +869,29 @@ function updateVoiceSelect(voices) {
     }
 }
 
+// 原文框切换锁定状态
+function toggleLock() {
+    const originalTextarea = document.getElementById('original');
+    const lockButton = document.getElementById('lockButton');
+    const lockIcon = lockButton.querySelector('.lock-icon');
+
+    isLocked = !isLocked;
+
+    if (isLocked) {
+        // 锁定状态
+        originalTextarea.setAttribute('readonly', 'true');
+        lockIcon.textContent = '🔒';
+        lockButton.classList.add('locked');
+        showToast('原文已锁定', 'success');
+    } else {
+        // 解锁状态
+        originalTextarea.removeAttribute('readonly');
+        lockIcon.textContent = '🔓';
+        lockButton.classList.remove('locked');
+        showToast('原文已解锁', 'success');
+    }
+}
+
 // 初始化语速控制
 function initTTSSpeedControl() {
     const speedSlider = document.getElementById('ttsSpeed');
@@ -828,9 +922,17 @@ function initializeSettingsTabs() {
 
 // 初始化动作按钮
 function initializeActionButtons() {
+    const textArea = document.getElementById('original');
+    const actionTips = document.getElementById('actionTips');
+    const resultTip = document.getElementById('resultTip');
+    let touchTimer = null;
+    let lastTap = 0;
+    let touchStartPosition = null;
+    let isSelecting = false;
+    let currentSelection = '';
+
     // 保存选择范围的函数
     function saveSelection() {
-        const textArea = document.getElementById('original');
         return {
             start: textArea.selectionStart,
             end: textArea.selectionEnd,
@@ -840,79 +942,273 @@ function initializeActionButtons() {
 
     // 恢复选择范围的函数
     function restoreSelection(savedSelection) {
-        const textArea = document.getElementById('original');
         textArea.focus();
         textArea.setSelectionRange(savedSelection.start, savedSelection.end);
     }
 
+    // 显示操作提示的函数
+    function showActionTips(x, y) {
+        // 获取选中的文本
+        let selection;
+        if (textArea.selectionStart !== textArea.selectionEnd) {
+            // 对于 textarea，直接使用 selectionStart 和 selectionEnd
+            selection = textArea.value.substring(textArea.selectionStart, textArea.selectionEnd);
+        } else {
+            // 否则使用 window.getSelection
+            selection = window.getSelection().toString();
+        }
+
+        selection = selection.trim();
+
+        if (selection && selection !== currentSelection) {
+            currentSelection = selection;
+
+            // 计算提示框位置
+            const windowWidth = window.innerWidth;
+            const windowHeight = window.innerHeight;
+            const tipsWidth = actionTips.offsetWidth;
+            const tipsHeight = actionTips.offsetHeight;
+
+            // 确保提示框不超出屏幕边界
+            let left = Math.max(10, Math.min(x - tipsWidth / 2, windowWidth - tipsWidth - 10));
+            let top = y + 20;
+
+            // 如果底部空间不足，将提示框显示在上方
+            if (top + tipsHeight > windowHeight - 10) {
+                top = y - tipsHeight - 20;
+            }
+
+            actionTips.style.display = 'block';
+            actionTips.style.left = `${left}px`;
+            actionTips.style.top = `${top}px`;
+
+            // 隐藏结果提示框
+            resultTip.style.display = 'none';
+        }
+    }
+
+    // PC端鼠标选择文本
+    textArea.addEventListener('mouseup', (e) => {
+        const selection = textArea.value.substring(textArea.selectionStart, textArea.selectionEnd).trim();
+        if (selection) {
+            showActionTips(e.pageX, e.pageY);
+        }
+    });
+
+    // 更新提示框位置
+    function updateActionTipsPosition(x, y) {
+        if (actionTips.style.display === 'block') {
+            const windowWidth = window.innerWidth;
+            const windowHeight = window.innerHeight;
+            const tipsWidth = actionTips.offsetWidth;
+            const tipsHeight = actionTips.offsetHeight;
+
+            let left = Math.max(10, Math.min(x - tipsWidth / 2, windowWidth - tipsWidth - 10));
+            let top = y + 20;
+
+            if (top + tipsHeight > windowHeight - 10) {
+                top = y - tipsHeight - 20;
+            }
+
+            actionTips.style.left = `${left}px`;
+            actionTips.style.top = `${top}px`;
+        }
+    }
+
+    // 处理触摸开始事件
+    textArea.addEventListener('touchstart', (e) => {
+        isSelecting = false;
+        touchStartPosition = {
+            x: e.touches[0].pageX,
+            y: e.touches[0].pageY
+        };
+
+        touchTimer = setTimeout(() => {
+            const selection = window.getSelection().toString().trim();
+            if (selection) {
+                e.preventDefault();
+                showActionTips(touchStartPosition.x, touchStartPosition.y);
+            }
+        }, 500);
+    }, { passive: false });
+
+    // 处理触摸移动事件
+    textArea.addEventListener('touchmove', (e) => {
+        isSelecting = true;
+        clearTimeout(touchTimer);
+
+        const touch = e.touches[0];
+        const selection = window.getSelection().toString().trim();
+
+        if (selection) {
+            updateActionTipsPosition(touch.pageX, touch.pageY);
+        }
+    });
+
+    // 处理触摸结束事件
+    textArea.addEventListener('touchend', (e) => {
+        clearTimeout(touchTimer);
+
+        const selection = window.getSelection().toString().trim();
+        if (selection) {
+            const touch = e.changedTouches[0];
+
+            if (isSelecting) {
+                // 如果是拖拽选择，使用最后的触摸位置
+                showActionTips(touch.pageX, touch.pageY);
+            } else {
+                // 检测双击
+                const currentTime = new Date().getTime();
+                const tapLength = currentTime - lastTap;
+
+                if (tapLength < 300 && tapLength > 0) {
+                    e.preventDefault();
+                    showActionTips(touch.pageX, touch.pageY);
+                }
+            }
+        }
+
+        lastTap = new Date().getTime();
+    });
+
+    // 阻止默认的上下文菜单
+    textArea.addEventListener('contextmenu', (e) => {
+        if (window.getSelection().toString().trim()) {
+            e.preventDefault();
+        }
+    });
+
+    // 监听选择变化事件
+    document.addEventListener('selectionchange', () => {
+        if (document.activeElement === textArea) {
+            const selection = window.getSelection().toString().trim();
+            if (!selection) {
+                actionTips.style.display = 'none';
+                resultTip.style.display = 'none';
+                currentSelection = '';
+            }
+        }
+    });
+
+    // 点击其他区域隐藏提示框
+    document.addEventListener('click', (e) => {
+        if (!actionTips.contains(e.target) && !resultTip.contains(e.target)) {
+            actionTips.style.display = 'none';
+            resultTip.style.display = 'none';
+            currentSelection = '';
+        }
+    });
+
     // 翻译按钮事件
     document.getElementById('translateBtn').addEventListener('click', async function(e) {
-        // 阻止事件冒泡
         e.preventDefault();
         e.stopPropagation();
 
-        // 保存当前选择范围
+        // 确保有选中的文本
+        const selection = textArea.value.substring(textArea.selectionStart, textArea.selectionEnd).trim();
+        if (!selection) {
+            return;
+        }
+
         const savedSelection = saveSelection();
-        const textArea = document.getElementById('original');
 
-        // 确保文本框获得焦点
-        textArea.focus();
+        try {
+            resultTip.style.display = 'block';
 
-        const translateTip = document.getElementById('actionTips');
-        const resultTip = document.getElementById('resultTip');
+            // 计算结果提示框位置
+            const actionTipsRect = actionTips.getBoundingClientRect();
+            const resultTipWidth = resultTip.offsetWidth;
+            const windowWidth = window.innerWidth;
 
-        if (currentSelection) {
-            try {
-                resultTip.style.display = 'block';
-                resultTip.style.position = 'absolute';
-                resultTip.style.left = translateTip.style.left;
-                resultTip.style.top = (parseInt(translateTip.style.top) + translateTip.offsetHeight + 5) + 'px';
+            let left = Math.max(10, Math.min(
+                actionTipsRect.left + (actionTips.offsetWidth - resultTipWidth) / 2,
+                windowWidth - resultTipWidth - 10
+            ));
 
-                const sourceContext = getSourceContext(currentSelection);
-                translationResult.textContent = '翻译中...';
+            resultTip.style.left = `${left}px`;
+            resultTip.style.top = `${actionTipsRect.bottom + 5}px`;
 
-                const settings = StorageManager.getSettings() || '{}';
-                const prompt = settings.translatePrompt.replace('{sourceContext}', sourceContext);
+            const translationResult = document.getElementById('translationResult');
+            const sourceContext = getSourceContext(selection);
+            translationResult.textContent = '翻译中...';
 
-                const result = await callOpenAI(prompt);
-                const formattedResult = formatTranslationResult(result);
-                translationResult.innerHTML = formattedResult;
+            const settings = StorageManager.getSettings() || '{}';
+            const prompt = settings.translatePrompt.replace('{sourceContext}', sourceContext);
 
-                saveToVocabulary(currentSelection, formattedResult);
+            const result = await callOpenAI(prompt);
+            const formattedResult = formatTranslationResult(result);
+            translationResult.innerHTML = formattedResult;
 
-                translateTip.style.display = 'none';
+            saveToVocabulary(selection, formattedResult);
+            actionTips.style.display = 'none';
 
-                // 在异步操作完成后恢复选择
-                setTimeout(() => restoreSelection(savedSelection), 0);
-            } catch (error) {
-                console.error('翻译失败：', error);
-                translationResult.textContent = '翻译失败';
-            }
+            setTimeout(() => restoreSelection(savedSelection), 0);
+        } catch (error) {
+            console.error('翻译失败：', error);
+            translationResult.textContent = '翻译失败';
         }
     });
 
     // 播放按钮事件
     document.getElementById('playBtn').addEventListener('click', function(e) {
-        // 阻止事件冒泡
         e.preventDefault();
         e.stopPropagation();
 
-        // 保存选择状态
+        // 确保有选中的文本
+        const selection = textArea.value.substring(textArea.selectionStart, textArea.selectionEnd).trim();
+        if (!selection) {
+            return;
+        }
+
         const savedSelection = saveSelection();
-        const textArea = document.getElementById('original');
+        playTTS(selection);
+        actionTips.style.display = 'none';
+        setTimeout(() => restoreSelection(savedSelection), 0);
+    });
 
-        // 确保文本框获得焦点
-        textArea.focus();
+    // 复制按钮事件
+    document.getElementById('copyBtn').addEventListener('click', async function(e) {
+        e.preventDefault();
+        e.stopPropagation();
 
-        if (currentSelection) {
-            playTTS(currentSelection);
-            document.getElementById('actionTips').style.display = 'none';
+        // 确保有选中的文本
+        const selection = textArea.value.substring(textArea.selectionStart, textArea.selectionEnd).trim();
+        if (!selection) {
+            return;
+        }
 
-            // 使用 setTimeout 确保在事件处理完成后恢复选择
+        const savedSelection = saveSelection();
+
+        try {
+            // 使用新的 Clipboard API
+            await navigator.clipboard.writeText(selection);
+            showToast('复制成功');
+            actionTips.style.display = 'none';
+            setTimeout(() => restoreSelection(savedSelection), 0);
+        } catch (err) {
+            // 降级方案：使用传统的复制方法
+            const textarea = document.createElement('textarea');
+            textarea.value = selection;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+
+            try {
+                document.execCommand('copy');
+                showToast('复制成功');
+            } catch (err) {
+                console.error('复制失败：', err);
+                showToast('复制失败', 'error');
+            }
+
+            document.body.removeChild(textarea);
+            actionTips.style.display = 'none';
             setTimeout(() => restoreSelection(savedSelection), 0);
         }
     });
 }
+
 
 // 将所有的初始化和事件监听整合到一个函数中
 async function initializeApp() {
@@ -932,6 +1228,19 @@ async function initializeApp() {
 
         // 加载设置
         await loadSettings();
+
+        // 加载上次的草稿
+        if (DraftManager.loadDraft()) {
+            showToast('已恢复上次的编辑内容', 'success');
+        }
+
+        // 启动自动保存
+        DraftManager.startAutoSave();
+
+        // 添加页面关闭前的保存
+        window.addEventListener('beforeunload', () => {
+            DraftManager.saveDraft();
+        });
 
         console.log('应用初始化完成');
     } catch (error) {
